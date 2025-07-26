@@ -3,10 +3,10 @@ kind: Service
 metadata:
   name: iris-api-service
 spec:
-  type: LoadBalancer
   selector:
     app: iris-api
   ports:
-  - protocol: TCP
-    port: 80
-    targetPort: 8200
+    - protocol: TCP
+      port: 80
+      targetPort: 80
+  type: LoadBalancer
