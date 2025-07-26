@@ -4,10 +4,10 @@ on:
   push:
     branches:
       - main
-      - develop
+      - cd-pipeline
   pull_request:
     branches:
-      - main
+      - cd-pipeline
 
 env:
   PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
