@@ -1,89 +1,51 @@
-name: Continuous Deployment
+name: CD Pipeline
 
 on:
   push:
     branches:
       - main
-      - develop
-  pull_request:
-    branches:
-      - main
 
 env:
-  PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
-  GKE_CLUSTER: iris-cluster
-  GKE_ZONE: us-central1-a
-  DEPLOYMENT_NAME: iris-api-deployment
+  PROJECT_ID: ultra-guard-461512-j0
+  GAR_LOCATION: us-central1
+  REPOSITORY: my-repo
   IMAGE: iris-api
-  REGISTRY_LOCATION: us-central1
+  CLUSTER_NAME: iris-cluster
+  CLUSTER_ZONE: us-central1-a
+  NAMESPACE: iris-app
 
 jobs:
-  setup-build-publish-deploy:
-    name: Setup, Build, Publish, and Deploy
+  deploy:
+    name: Deploy to GKE
     runs-on: ubuntu-latest
-    environment: production
 
     steps:
-    - name: Checkout
-      uses: actions/checkout@v3
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-    - name: Setup Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.10'
+      - name: Set up Google Cloud SDK
+        uses: google-github-actions/setup-gcloud@v1
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+          service_account_key: ${{ secrets.GCP_SA_KEY }}
+          export_default_credentials: true
 
-    - name: Install CML
-      run: |
-        pip install cml
-        npm install -g @dvcorg/cml
+      - name: Configure Docker for Artifact Registry
+        run: |
+          gcloud auth configure-docker $GAR_LOCATION-docker.pkg.dev
 
-    - name: Setup Google Cloud CLI
-      uses: google-github-actions/setup-gcloud@v1
-      with:
-        service_account_key: ${{ secrets.GCP_SA_KEY }}
-        project_id: ${{ secrets.GCP_PROJECT_ID }}
+      - name: Build Docker image
+        run: |
+          docker build -t $GAR_LOCATION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/$IMAGE:latest .
 
-    - name: Configure Docker to use gcloud as credential helper
-      run: |
-        gcloud auth configure-docker $REGISTRY_LOCATION-docker.pkg.dev
+      - name: Push Docker image to Artifact Registry
+        run: |
+          docker push $GAR_LOCATION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/$IMAGE:latest
 
-    - name: Get GKE credentials
-      run: |
-        gcloud container clusters get-credentials "$GKE_CLUSTER" --zone "$GKE_ZONE"
+      - name: Set GKE credentials
+        run: |
+          gcloud container clusters get-credentials $CLUSTER_NAME --zone $CLUSTER_ZONE --project $PROJECT_ID
 
-    - name: Install dependencies
-      run: |
-        pip install -r app/requirements.txt
-        pip install pytest requests
-
-    - name: Run tests
-      run: |
-        python -m pytest tests/ -v
-
-    - name: Build Docker image
-      run: |
-        cd app
-        docker build -t "$REGISTRY_LOCATION-docker.pkg.dev/$PROJECT_ID/my-repo/$IMAGE:$GITHUB_SHA" .
-        docker tag "$REGISTRY_LOCATION-docker.pkg.dev/$PROJECT_ID/my-repo/$IMAGE:$GITHUB_SHA" "$REGISTRY_LOCATION-docker.pkg.dev/$PROJECT_ID/my-repo/$IMAGE:latest"
-
-    - name: Publish Docker image
-      run: |
-        docker push "$REGISTRY_LOCATION-docker.pkg.dev/$PROJECT_ID/my-repo/$IMAGE:$GITHUB_SHA"
-        docker push "$REGISTRY_LOCATION-docker.pkg.dev/$PROJECT_ID/my-repo/$IMAGE:latest"
-
-    - name: Deploy to GKE
-      run: |
-        # Update deployment image
-        sed -i "s|PROJECT_ID|$PROJECT_ID|g" k8s/deployment.yaml
-        kubectl apply -f k8s/deployment.yaml
-        kubectl set image deployment/$DEPLOYMENT_NAME iris-api=$REGISTRY_LOCATION-docker.pkg.dev/$PROJECT_ID/my-repo/$IMAGE:$GITHUB_SHA
-        
-        # Wait for rollout
-        kubectl rollout status deployment/$DEPLOYMENT_NAME
-        kubectl get services -o wide
-
-    - name: Run CML report
-      env:
-        REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: |
-        python .cml/cd-pipeline.py
+      - name: Deploy to GKE
+        run: |
+          kubectl set image deployment/$IMAGE $IMAGE=$GAR_LOCATION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/$IMAGE:latest -n $NAMESPACE
