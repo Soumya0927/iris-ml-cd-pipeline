@@ -84,7 +84,7 @@ jobs:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           API_URL: ${{ env.API_URL }}
         run: |
-	  npm install -g @dvcai/cml
+          npm install -g @dvcai/cml
           pip install -r .cml/requirements.txt
           python .cml/cd-pipeline.py
           cml comment create report.md
