@@ -9,7 +9,7 @@ env:
   PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
   GKE_CLUSTER: iris-cluster
   GKE_ZONE: us-central1-a
-  ARTIFACT_REGISTRY: my-repo # The name of your Artifact Registry repo
+  ARTIFACT_REGISTRY: my-repo
   IMAGE_NAME: iris-api
   DEPLOYMENT_NAME: iris-api-deployment
   SERVICE_NAME: iris-api-service
@@ -27,7 +27,6 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Authenticate to Google Cloud
-        id: auth
         uses: google-github-actions/auth@v2
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
@@ -42,36 +41,32 @@ jobs:
         run: gcloud auth configure-docker us-central1-docker.pkg.dev
 
       - name: Build and Push Docker Image
+        id: build-image
         run: |
-          IMAGE_TAG="us-central1-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.ARTIFACT_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}"
+          IMAGE_TAG="us-central1-docker.pkg.dev/${PROJECT_ID}/${ARTIFACT_REGISTRY}/${IMAGE_NAME}:${{ github.sha }}"
+          echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV
           docker build -t $IMAGE_TAG ./app
           docker push $IMAGE_TAG
-        id: build-image
 
       - name: Deploy to GKE
         run: |
-          gcloud container clusters get-credentials ${{ env.GKE_CLUSTER }} --zone ${{ env.GKE_ZONE }}
-          
-          # Use sed to update the image in the deployment manifest
-          IMAGE_TAG="us-central1-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.ARTIFACT_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}"
+          gcloud container clusters get-credentials $GKE_CLUSTER --zone $GKE_ZONE
           sed -i "s|IMAGE_PLACEHOLDER|$IMAGE_TAG|g" k8s/deployment.yaml
-          
-          # Apply the updated manifests
           kubectl apply -f k8s/deployment.yaml
           kubectl apply -f k8s/service.yaml
 
       - name: Wait for External IP
         id: get-ip
         run: |
-          echo "Waiting for external IP for service/${{ env.SERVICE_NAME }}..."
+          echo "Waiting for external IP for service/$SERVICE_NAME..."
           for i in {1..30}; do
-            EXTERNAL_IP=$(kubectl get service ${{ env.SERVICE_NAME }} -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+            EXTERNAL_IP=$(kubectl get service $SERVICE_NAME -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
             if [ -n "$EXTERNAL_IP" ]; then
-              echo "API_URL=http://$EXTERNAL_IP" >> $GITHUB_ENV
+              echo "EXTERNAL_IP=$EXTERNAL_IP" >> $GITHUB_ENV
               echo "External IP found: $EXTERNAL_IP"
               break
             fi
-            echo "Waiting for external IP... attempt $i of 30."
+            echo "Attempt $i of 30: still waiting..."
             sleep 10
           done
           if [ -z "$EXTERNAL_IP" ]; then
@@ -79,12 +74,12 @@ jobs:
             exit 1
           fi
 
+      - uses: iterative/setup-cml@v1
+
       - name: Generate CML Report
         env:
-          repo_token: ${{ secrets.GITHUB_TOKEN }}
-          API_URL: ${{ env.API_URL }}
+          REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          npm install -g @iterative/cml
           pip install -r .cml/requirements.txt
           python .cml/cd-pipeline.py
-          cml comment create report.md
+          cml comment create build-and-deploy.md
