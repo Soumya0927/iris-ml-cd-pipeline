@@ -83,4 +83,4 @@ jobs:
         run: |
           pip install -r .cml/requirements.txt
           python .cml/cd-pipeline.py
-          cml comment create build-and-deploy.md
+          cml comment create report.md
