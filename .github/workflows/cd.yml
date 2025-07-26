@@ -63,6 +63,7 @@ jobs:
             EXTERNAL_IP=$(kubectl get service $SERVICE_NAME -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
             if [ -n "$EXTERNAL_IP" ]; then
               echo "EXTERNAL_IP=$EXTERNAL_IP" >> $GITHUB_ENV
+              echo "API_URL=http://$EXTERNAL_IP" >> $GITHUB_ENV
               echo "External IP found: $EXTERNAL_IP"
               break
             fi
