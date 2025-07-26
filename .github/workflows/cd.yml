@@ -79,7 +79,6 @@ jobs:
       - name: 'Install CML and dependencies'
         if: success()
         run: |
-          pip install cml dvc
           pip install -r app/requirements.txt
           pip install pytest
       
