@@ -5,7 +5,7 @@ metadata:
   labels:
     app: iris-api
 spec:
-  replicas: 1
+  replicas: 2
   selector:
     matchLabels:
       app: iris-api
@@ -15,15 +15,14 @@ spec:
         app: iris-api
     spec:
       containers:
-      - name: iris-api-container
-        # This is the placeholder that will be replaced by the workflow
-        image: your-image-placeholder
+      - name: iris-api
+        image: IMAGE_PLACEHOLDER
         ports:
-        - containerPort: 8200
+        - containerPort: 80
         resources:
           requests:
-            memory: "64Mi"
-            cpu: "250m"
-          limits:
+            cpu: "100m"
             memory: "128Mi"
-            cpu: "500m"
+          limits:
+            cpu: "200m"
+            memory: "256Mi"

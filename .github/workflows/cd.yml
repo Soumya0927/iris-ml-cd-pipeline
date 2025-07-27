@@ -1,116 +1,86 @@
-name: Continuous Deployment
+name: Continuous Deployment to GKE
 
 on:
   push:
     branches:
       - main
 
+env:
+  PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+  GKE_CLUSTER: iris-cluster
+  GKE_ZONE: us-central1-a
+  ARTIFACT_REGISTRY: my-repo
+  IMAGE_NAME: iris-api
+  DEPLOYMENT_NAME: iris-api-deployment
+  SERVICE_NAME: iris-api-service
+
 jobs:
   build-and-deploy:
+    name: Build and Deploy
     runs-on: ubuntu-latest
-    env:
-      PROJECT_ID: ultra-guard-461512-j0 # Your GCP Project ID
-      GCP_REGION: us-central1          # Your GKE cluster and Artifact Registry region
-      IMAGE_NAME: iris-api              # Name for your Docker image
-      K8S_CLUSTER: iris-cluster        # Name of your GKE cluster
-      K8S_ZONE: us-central1-a         # Zone of your GKE cluster
+    permissions:
+      contents: 'write'
+      id-token: 'write'
 
     steps:
-      - name: Checkout repository
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: 'Set up GKE credentials'
-        uses: 'google-github-actions/auth@v2'
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
         with:
-          credentials_json: '${{ secrets.GCP_SA_KEY }}'
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
 
-      - name: 'Set up Cloud SDK'
-        uses: 'google-github-actions/setup-gcloud@v2'
-        with:
-          project_id: ${{ env.PROJECT_ID }}
-          # The gke-gcloud-auth-plugin is required to connect to GKE.
-          # The command history shows you've installed it manually, but it's good practice
-          # to ensure it's available in the CI/CD environment.
-          install_components: 'gke-gcloud-auth-plugin'
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
 
-      - name: 'Configure Docker'
-        run: gcloud auth configure-docker ${GCP_REGION}-docker.pkg.dev
+      - name: Install GKE Auth Plugin
+        run: gcloud components install gke-gcloud-auth-plugin
 
-      - name: 'Build and push Docker image'
+      - name: Configure Docker
+        run: gcloud auth configure-docker us-central1-docker.pkg.dev
+
+      - name: Build and Push Docker Image
+        id: build-image
         run: |
-          # Use your script to build and tag the image
-          export REPO_HOST=${GCP_REGION}-docker.pkg.dev
-          export REPO_NAME=my-repo
-          export IMAGE_TAG="${REPO_HOST}/${PROJECT_ID}/${REPO_NAME}/${IMAGE_NAME}:${GITHUB_SHA}"
-          
-          docker build -t "${IMAGE_TAG}" ./app/
-          docker push "${IMAGE_TAG}"
-          
-          echo "IMAGE_TAG=${IMAGE_TAG}" >> $GITHUB_ENV
-          
-      - name: 'Set GKE context'
-        run: gcloud container clusters get-credentials ${K8S_CLUSTER} --zone=${K8S_ZONE} --project=${PROJECT_ID}
+          IMAGE_TAG="us-central1-docker.pkg.dev/${PROJECT_ID}/${ARTIFACT_REGISTRY}/${IMAGE_NAME}:${{ github.sha }}"
+          echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV
+          docker build -t $IMAGE_TAG ./app
+          docker push $IMAGE_TAG
 
-      - name: 'Deploy to Kubernetes'
-        id: deploy
+      - name: Deploy to GKE
         run: |
-          # Use your deployment script
-          export IMAGE_TAG=${{ env.IMAGE_TAG }}
-          
-          # Replace the image tag in the deployment manifest
-          sed "s|your-image-placeholder|${IMAGE_TAG}|g" k8s/deployment.yaml > k8s/deployment-final.yaml
-          
-          # Apply the updated manifests
-          kubectl apply -f k8s/deployment-final.yaml
+          gcloud container clusters get-credentials $GKE_CLUSTER --zone $GKE_ZONE
+          sed -i "s|IMAGE_PLACEHOLDER|$IMAGE_TAG|g" k8s/deployment.yaml
+          kubectl apply -f k8s/deployment.yaml
           kubectl apply -f k8s/service.yaml
-          
-          # Wait for the deployment to roll out
-          kubectl rollout status deployment/${IMAGE_NAME}-deployment
-          
-          echo "Deployment successful."
-      
-      # CML Report Section
-      - name: 'Install CML'
-        if: success()
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.x'
-      
-      - name: 'Install CML and dependencies'
-        if: success()
+
+      - name: Wait for External IP
+        id: get-ip
         run: |
-          pip install -r app/requirements.txt
-          pip install pytest
-      
-      - name: 'Wait for external IP and generate report'
-        if: success()
-        run: |
-          # This script will wait for the service to get an external IP and then call the CML script.
-          # We need to make sure the service is up and running before generating the report.
-          # The history shows you were trying to implement this logic.
-          # We'll use a loop to check the IP.
-          
-          for i in $(seq 1 30); do
-            EXTERNAL_IP=$(kubectl get service ${IMAGE_NAME}-service -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+          echo "Waiting for external IP for service/$SERVICE_NAME..."
+          for i in {1..30}; do
+            EXTERNAL_IP=$(kubectl get service $SERVICE_NAME -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
             if [ -n "$EXTERNAL_IP" ]; then
-              echo "External IP found: $EXTERNAL_IP"
               echo "EXTERNAL_IP=$EXTERNAL_IP" >> $GITHUB_ENV
+              echo "API_URL=http://$EXTERNAL_IP" >> $GITHUB_ENV
+              echo "External IP found: $EXTERNAL_IP"
               break
             fi
-            echo "Waiting for external IP... ($i/30)"
+            echo "Attempt $i of 30: still waiting..."
             sleep 10
           done
-          
           if [ -z "$EXTERNAL_IP" ]; then
-            echo "::error::Timed out waiting for external IP."
+            echo "::error::External IP not found after 5 minutes."
             exit 1
           fi
-          
-          # Now, generate the CML report
-          python .cml/cd-pipeline.py
-          
-      - name: 'Post CML report to pull request'
-        if: success()
+
+      - uses: iterative/setup-cml@v1
+
+      - name: Generate CML Report
         env:
           REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: cml comment build-and-deploy.md
+        run: |
+          pip install -r .cml/requirements.txt
+          python .cml/cd-pipeline.py
+          cml comment create report.md
